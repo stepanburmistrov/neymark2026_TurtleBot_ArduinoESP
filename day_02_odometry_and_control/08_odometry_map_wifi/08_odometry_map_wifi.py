@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Финальный пульт дня 2: ручное управление и карта одометрии."""
 
+
 from __future__ import annotations
 
 from dataclasses import dataclass
