@@ -41,7 +41,7 @@ ROBOT_MARKER_ID = 4
 ROBOT_ADDRESS = ("192.168.4.1", 8888)
 
 # Скорости робота.
-LINEAR_SPEED_MM_S = 180
+LINEAR_SPEED_MM_S = 220
 ANGULAR_SPEED_MRAD_S = 3000
 
 # Допуски визуального управления.
@@ -50,9 +50,15 @@ GOAL_TOLERANCE_PX = 42
 WAYPOINT_TOLERANCE_PX = 28
 
 # Параметры карты и планировщика.
-GRID_CELL_SIZE_PX = 18
+GRID_CELL_SIZE_PX = 25
 WALL_BRUSH_RADIUS_PX = 18
-ROBOT_SAFETY_RADIUS_PX = 44
+ROBOT_SAFETY_RADIUS_PX = 40
+
+# Если центр робота уже оказался в оранжевой зоне, планировщик должен
+# построить путь наружу, а не заблокировать стартовую клетку.
+# Красная область препятствия при этом никогда не очищается.
+START_ESCAPE_RADIUS_PX = ROBOT_SAFETY_RADIUS_PX + GRID_CELL_SIZE_PX
+
 REPLAN_PERIOD_SECONDS = 0.65
 
 # Параметры обмена и безопасности.
@@ -374,17 +380,26 @@ def plan_path(
     height, width = obstacle_mask.shape
     inflated = inflate_obstacles(obstacle_mask)
 
-    # Небольшая область под центром робота очищается только для планирования.
-    # Это позволяет построить выход, если новая стена была нарисована слишком близко.
+    # Оранжевая область является запасом безопасности для планировщика.
+    # Если робот уже оказался внутри неё, необходимо разрешить ему выехать наружу.
+    #
+    # Для этого вокруг текущего положения временно очищается стартовая область,
+    # но только там, где нет самой нарисованной красной стены. Реальное
+    # препятствие в obstacle_mask никогда не удаляется.
     planning_mask = inflated.copy()
     robot_point = tuple(np.rint(robot_pixel).astype(int))
+
+    escape_zone = np.zeros_like(planning_mask)
     cv2.circle(
-        planning_mask,
+        escape_zone,
         robot_point,
-        GRID_CELL_SIZE_PX,
-        0,
+        START_ESCAPE_RADIUS_PX,
+        255,
         -1,
     )
+
+    may_clear = (escape_zone > 0) & (obstacle_mask == 0)
+    planning_mask[may_clear] = 0
 
     blocked, rows, cols = blocked_cells_from_mask(planning_mask)
     start = pixel_to_cell(robot_pixel, rows, cols)
@@ -837,8 +852,22 @@ def main() -> None:
                 robot_x = max(0, min(width - 1, robot_x))
                 robot_y = max(0, min(height - 1, robot_y))
 
-                if inflated_mask[robot_y, robot_x] > 0:
-                    state.status = "ROBOT TOO CLOSE TO VIRTUAL WALL"
+                inside_drawn_wall = (
+                    state.obstacle_mask[robot_y, robot_x] > 0
+                )
+                inside_safety_zone = (
+                    inflated_mask[robot_y, robot_x] > 0
+                )
+
+                # Красная зона — само виртуальное препятствие. Если центр робота
+                # находится в ней, движение запрещается.
+                #
+                # Оранжевая зона — только запас безопасности для планировщика.
+                # Нахождение центра робота в ней больше не вызывает STOP:
+                # планировщик строит маршрут наружу и продолжает движение.
+                if inside_drawn_wall:
+                    state.status = "ROBOT INSIDE VIRTUAL WALL"
+                    state.map_changed = True
 
                 else:
                     need_replan = (
@@ -903,6 +932,13 @@ def main() -> None:
                             else:
                                 command = f"VEL {LINEAR_SPEED_MM_S} 0"
                                 state.status = "DRIVE TO WAYPOINT"
+
+                    # Сообщение носит информационный характер: робот продолжает
+                    # выполнять найденный маршрут и выезжает из оранжевой зоны.
+                    if inside_safety_zone and command != "STOP":
+                        state.status = (
+                            "LEAVING SAFETY ZONE | " + state.status
+                        )
 
             display = render_display(
                 frame,
