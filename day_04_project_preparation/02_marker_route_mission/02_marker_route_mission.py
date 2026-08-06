@@ -44,8 +44,8 @@ TELEMETRY_TIMEOUT_SECONDS = 0.8
 
 # Белое поле даёт значение выше порога, чёрная граница — ниже.
 # Значения обязательно проверить для каждого робота.
-LEFT_LINE_THRESHOLD = 500
-RIGHT_LINE_THRESHOLD = 500
+LEFT_LINE_THRESHOLD = 5
+RIGHT_LINE_THRESHOLD = 5
 OBSTACLE_STOP_CM = 14
 
 LINE_SAFETY_ENABLED = True
